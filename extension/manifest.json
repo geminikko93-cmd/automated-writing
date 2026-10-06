@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "플로우 큐 (한글 지원)",
   "description": "Google Flow에서 Veo·Nano Banana 프롬프트를 순서대로 자동 제출합니다. 한글 프롬프트를 지원합니다.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "permissions": ["storage", "sidePanel", "scripting", "tabs"],
   "host_permissions": ["https://flow.google.com/*", "https://labs.google/*"],
   "background": { "service_worker": "background.js" },

@@ -200,9 +200,17 @@
   }
 
   const DURATION_TEXT = /^(\d+)\s*(?:s|sec|seconds?|초)$/i;
-  const settingsTrigger = () => findButton(LABELS.settings);
+  // 입력창 아래의 설정 버튼("동영상 · 720p · 8초 … x1" / "Video · 720p · 8s … x1")을
+  // 글자 모양으로 먼저 찾는다. aria-label로 찾으면 한국어 화면에서 상단의 다른 '설정' 버튼이 잡힐 수 있다.
+  const settingsTrigger = () => {
+    for (const el of document.querySelectorAll('button, [role="button"]')) {
+      const t = (el.innerText || '').replace(/\s+/g, ' ');
+      if (isVisible(el) && t.includes('·') && /(video|image|동영상|이미지)/i.test(t) && /\bx\d\b/.test(t)) return el;
+    }
+    return findButton(['Settings trigger']);
+  };
   const currentDuration = () => {
-    const m = (settingsTrigger()?.innerText || '').match(/(\d+)\s*s\b/);
+    const m = (settingsTrigger()?.innerText || '').match(/(\d+)\s*(?:s|초)(?![a-z])/i);
     return m ? Number(m[1]) : null;
   };
   const isVideoMode = () => /video|동영상|영상/i.test(settingsTrigger()?.innerText || '');
@@ -236,6 +244,19 @@
     return null;
   }
 
+  // Flow 메뉴의 일부 버튼은 click이 아니라 pointerdown/mousedown에 반응한다.
+  // 실제 마우스 클릭처럼 이벤트를 순서대로 보내면 어느 쪽이든 동작한다.
+  function realClick(el) {
+    const r = el.getBoundingClientRect();
+    const opts = { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 1,
+      clientX: r.x + r.width / 2, clientY: r.y + r.height / 2 };
+    el.dispatchEvent(new PointerEvent('pointerdown', { ...opts, pointerType: 'mouse', isPrimary: true }));
+    el.dispatchEvent(new MouseEvent('mousedown', opts));
+    el.dispatchEvent(new PointerEvent('pointerup', { ...opts, buttons: 0, pointerType: 'mouse', isPrimary: true }));
+    el.dispatchEvent(new MouseEvent('mouseup', { ...opts, buttons: 0 }));
+    el.dispatchEvent(new MouseEvent('click', { ...opts, buttons: 0 }));
+  }
+
   const pressEscape = () =>
     (document.activeElement || document.body).dispatchEvent(
       new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true })
@@ -246,7 +267,7 @@
     if (!menuOpen()) return;
     pressEscape();
     await sleep(300);
-    if (menuOpen()) { trigger.click(); await sleep(300); }
+    if (menuOpen()) { realClick(trigger); await sleep(300); }
   }
 
   async function ensureDuration(needed) {
@@ -256,11 +277,11 @@
 
     // 메뉴가 이미 열려 있으면 다시 누르지 않는다 (누르면 닫혀 버림).
     const menuOpen = () => durationOptions().size > 0 || !!durationDropdown();
-    if (!menuOpen()) { trigger.click(); await sleep(700); }
+    if (!menuOpen()) { realClick(trigger); await sleep(700); }
     let options = durationOptions();
     if (!options.size) {
       const dd = durationDropdown();
-      if (dd) { dd.click(); await sleep(500); options = durationOptions(); }
+      if (dd) { realClick(dd); await sleep(500); options = durationOptions(); }
     }
     if (!options.size) {
       await closeMenu(menuOpen, trigger);
@@ -271,7 +292,7 @@
     const lengths = [...options.keys()].sort((a, b) => a - b);
     const chosen = lengths.find((n) => n >= needed) ?? lengths[lengths.length - 1];
     if (currentDuration() !== chosen) {
-      options.get(chosen).click();
+      realClick(options.get(chosen));
       await sleep(500);
     }
     await closeMenu(menuOpen, trigger);
@@ -288,7 +309,7 @@
     const wasOpen = durationOptions().size > 0 || !!durationDropdown();
     // 숨겨져 있다가 보이게 된 것도 잡도록 '보이던 요소'를 기준으로 비교한다.
     const before = new Set([...document.querySelectorAll('body *')].filter(isVisible));
-    if (!wasOpen) { trigger.click(); await sleep(800); }
+    if (!wasOpen) { realClick(trigger); await sleep(800); }
 
     // 직접 가진 글자가 있는 요소만 (자식 글자 제외)
     const ownText = (el) =>
