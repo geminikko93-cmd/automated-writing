@@ -216,3 +216,5 @@ $('diagSetBtn').onclick = async () => {
   await navigator.clipboard.writeText(JSON.stringify(res, null, 2));
   alert('설정 메뉴 진단 정보를 클립보드에 복사했습니다. 그대로 붙여넣어 보내 주세요.');
 };
+
+$('ver').textContent = `v${chrome.runtime.getManifest().version}`;

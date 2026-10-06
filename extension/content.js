@@ -285,21 +285,39 @@
   async function diagnoseSettings() {
     const trigger = settingsTrigger();
     if (!trigger) return { ok: false, error: '설정 버튼을 찾지 못함' };
-    const before = new Set(document.querySelectorAll('*'));
-    trigger.click();
-    await sleep(800);
-    const appeared = [...document.querySelectorAll(CLICKABLE + ', [role="combobox"], [role="listbox"], [role="menu"], [role="dialog"]')]
-      .filter((el) => isVisible(el) && !before.has(el))
-      .map(describe);
-    const dd = durationDropdown();
+    const wasOpen = durationOptions().size > 0 || !!durationDropdown();
+    // 숨겨져 있다가 보이게 된 것도 잡도록 '보이던 요소'를 기준으로 비교한다.
+    const before = new Set([...document.querySelectorAll('body *')].filter(isVisible));
+    if (!wasOpen) { trigger.click(); await sleep(800); }
+
+    // 직접 가진 글자가 있는 요소만 (자식 글자 제외)
+    const ownText = (el) =>
+      [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent.trim()).join(' ').trim();
+    const brief = (el) => {
+      const d = describe(el);
+      d.ownText = ownText(el).slice(0, 60);
+      d.clickableAncestor = (() => {
+        const c = el.closest(CLICKABLE + ', [role="combobox"], [tabindex]');
+        return c && c !== el ? `${c.tagName.toLowerCase()}${c.getAttribute('role') ? '[role=' + c.getAttribute('role') + ']' : ''}` : null;
+      })();
+      return d;
+    };
+    const visibleAll = [...document.querySelectorAll('body *')].filter(isVisible);
     const result = {
+      version: chrome.runtime.getManifest().version,
       trigger: describe(trigger),
-      appeared,
-      durationDropdown: dd ? describe(dd) : null,
+      menuWasAlreadyOpen: wasOpen,
+      // 설정 버튼을 누른 뒤 새로 나타난 글자 요소들
+      appeared: visibleAll.filter((el) => !before.has(el) && ownText(el)).slice(0, 150).map(brief),
+      // 화면 어디든 "8s", "10 seconds", "8초"처럼 길이로 보이는 글자
+      durationLike: visibleAll
+        .filter((el) => /\b\d+\s*(?:s|sec|seconds?|초)\b/i.test(ownText(el)) && el !== trigger && !trigger.contains(el))
+        .slice(0, 40)
+        .map(brief),
+      durationDropdown: durationDropdown() ? describe(durationDropdown()) : null,
       durationOptions: [...durationOptions().keys()],
     };
-    pressEscape();
-    await sleep(300);
+    if (!wasOpen) await closeMenu(() => durationOptions().size > 0 || !!durationDropdown(), trigger);
     return { ok: true, details: result };
   }
 
