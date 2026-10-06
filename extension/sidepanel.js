@@ -8,11 +8,12 @@ let running = false;
 
 // ---------- 저장/불러오기 ----------
 async function load() {
-  const data = await chrome.storage.local.get(['queue', 'interval', 'retries', 'split', 'runState']);
+  const data = await chrome.storage.local.get(['queue', 'interval', 'retries', 'split', 'runState', 'autoDuration']);
   queue = data.queue || [];
   running = !!(data.runState && data.runState.running);
   if (data.interval != null) $('interval').value = data.interval;
   if (data.retries != null) $('retries').value = data.retries;
+  if (data.autoDuration != null) $('autoDuration').checked = data.autoDuration;
   if (data.split) document.querySelector(`input[name=split][value=${data.split}]`).checked = true;
   render();
 }
@@ -27,6 +28,7 @@ function saveSettings() {
   chrome.storage.local.set({
     interval: Number($('interval').value),
     retries: Number($('retries').value),
+    autoDuration: $('autoDuration').checked,
     split: document.querySelector('input[name=split]:checked').value,
   });
 }
@@ -190,6 +192,7 @@ $('retryBtn').onclick = () =>
 $('clearBtn').onclick = () => chrome.storage.local.set({ queue: [] });
 $('interval').onchange = saveSettings;
 $('retries').onchange = saveSettings;
+$('autoDuration').onchange = saveSettings;
 document.querySelectorAll('input[name=split]').forEach((r) => (r.onchange = saveSettings));
 
 $('diagBtn').onclick = async () => {
@@ -205,3 +208,11 @@ chrome.tabs.onUpdated.addListener((_id, info) => info.status === 'complete' && c
 
 load();
 checkConnection();
+
+$('diagSetBtn').onclick = async () => {
+  const tab = await getFlowTab();
+  if (!tab) return alert('Flow 탭을 찾지 못했습니다.');
+  const res = await send(tab, { type: 'diagnoseSettings' });
+  await navigator.clipboard.writeText(JSON.stringify(res, null, 2));
+  alert('설정 메뉴 진단 정보를 클립보드에 복사했습니다. 그대로 붙여넣어 보내 주세요.');
+};

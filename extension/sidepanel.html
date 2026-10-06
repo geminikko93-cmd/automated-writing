@@ -30,6 +30,9 @@
       <label class="inline">제출 간격(초) <input id="interval" type="number" min="0" value="10"></label>
       <label class="inline">재시도 <input id="retries" type="number" min="0" max="5" value="2"></label>
     </div>
+    <div class="row">
+      <label class="inline"><input id="autoDuration" type="checkbox" checked> 프롬프트의 시간(예: 6-8s)에 맞춰 영상 길이 자동 선택</label>
+    </div>
     <p class="hint">실행은 Flow 페이지에서 진행되므로 이 패널을 닫아도 계속됩니다.<br>모델·비율·길이·개수는 Flow 입력창의 설정 버튼에서 먼저 맞춰 두세요. 모든 프롬프트에 그대로 적용됩니다.</p>
     <div class="row">
       <button id="startBtn">시작</button>
@@ -42,7 +45,7 @@
   <section>
     <div class="row between">
       <strong>큐 <span id="count"></span></strong>
-      <button id="diagBtn" class="link">진단 정보 복사</button>
+      <span><button id="diagBtn" class="link">진단 정보 복사</button> · <button id="diagSetBtn" class="link">설정 메뉴 진단</button></span>
     </div>
     <ol id="queue"></ol>
   </section>

@@ -190,6 +190,119 @@
     };
   }
 
+  // ---------- 영상 길이 자동 선택 ----------
+  // 프롬프트의 "0-2s", "6-8s", "8~10초" 같은 시간 표기에서 가장 큰 끝 값을 읽는다.
+  function requiredSeconds(text) {
+    let max = 0;
+    const re = /(\d+(?:\.\d+)?)\s*[-~–]\s*(\d+(?:\.\d+)?)\s*(?:s|sec|seconds?|초)\b/gi;
+    for (const m of text.matchAll(re)) max = Math.max(max, parseFloat(m[2]));
+    return max ? Math.ceil(max) : null;
+  }
+
+  const DURATION_TEXT = /^(\d+)\s*(?:s|sec|seconds?|초)$/i;
+  const settingsTrigger = () => findButton(LABELS.settings);
+  const currentDuration = () => {
+    const m = (settingsTrigger()?.innerText || '').match(/(\d+)\s*s\b/);
+    return m ? Number(m[1]) : null;
+  };
+  const isVideoMode = () => /video|동영상|영상/i.test(settingsTrigger()?.innerText || '');
+
+  const CLICKABLE =
+    'button, [role="option"], [role="menuitem"], [role="menuitemradio"], [role="radio"], [role="tab"], li, label';
+
+  // 설정 메뉴 안에서 "4s", "8s", "8초"처럼 길이만 적힌 선택지를 찾는다.
+  function durationOptions() {
+    const trigger = settingsTrigger();
+    const out = new Map();
+    for (const el of document.querySelectorAll(CLICKABLE)) {
+      if (el === trigger || !isVisible(el) || isDropdown(el)) continue;
+      const m = (el.innerText || '').trim().match(DURATION_TEXT);
+      if (m && !out.has(Number(m[1]))) out.set(Number(m[1]), el);
+    }
+    return out;
+  }
+
+  // 현재 값을 보여 주는 드롭다운 버튼은 선택지가 아니다.
+  const isDropdown = (el) =>
+    el.getAttribute('role') === 'combobox' || el.hasAttribute('aria-haspopup') || el.hasAttribute('aria-expanded');
+
+  // 길이 선택지가 드롭다운 안에 숨어 있으면, 현재 길이가 적힌 드롭다운을 먼저 연다.
+  function durationDropdown() {
+    const trigger = settingsTrigger();
+    for (const el of document.querySelectorAll('[role="combobox"], [aria-haspopup], [aria-expanded], button')) {
+      if (el === trigger || !isVisible(el) || !isDropdown(el)) continue;
+      if (/\b\d+\s*(?:s|sec|seconds?|초)\b/i.test((el.innerText || '').trim()) && (el.innerText || '').length < 40) return el;
+    }
+    return null;
+  }
+
+  const pressEscape = () =>
+    (document.activeElement || document.body).dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true })
+    );
+
+  // Esc로 닫고, 그래도 열려 있으면 설정 버튼을 한 번 더 눌러 닫는다.
+  async function closeMenu(menuOpen, trigger) {
+    if (!menuOpen()) return;
+    pressEscape();
+    await sleep(300);
+    if (menuOpen()) { trigger.click(); await sleep(300); }
+  }
+
+  async function ensureDuration(needed) {
+    if (!needed || !isVideoMode()) return { ok: true, skipped: true };
+    const trigger = settingsTrigger();
+    if (!trigger) return { ok: false, error: '설정 버튼을 찾지 못함' };
+
+    // 메뉴가 이미 열려 있으면 다시 누르지 않는다 (누르면 닫혀 버림).
+    const menuOpen = () => durationOptions().size > 0 || !!durationDropdown();
+    if (!menuOpen()) { trigger.click(); await sleep(700); }
+    let options = durationOptions();
+    if (!options.size) {
+      const dd = durationDropdown();
+      if (dd) { dd.click(); await sleep(500); options = durationOptions(); }
+    }
+    if (!options.size) {
+      await closeMenu(menuOpen, trigger);
+      return { ok: false, error: '설정 메뉴에서 길이 선택지를 찾지 못함' };
+    }
+
+    // 필요한 길이 이상 중 가장 짧은 것, 없으면 가장 긴 것을 고른다.
+    const lengths = [...options.keys()].sort((a, b) => a - b);
+    const chosen = lengths.find((n) => n >= needed) ?? lengths[lengths.length - 1];
+    if (currentDuration() !== chosen) {
+      options.get(chosen).click();
+      await sleep(500);
+    }
+    await closeMenu(menuOpen, trigger);
+
+    const now = currentDuration();
+    if (now !== chosen) return { ok: false, error: `${chosen}초로 바꾸지 못함 (현재 ${now ?? '?'}초)` };
+    return { ok: true, chosen, needed, lengths };
+  }
+
+  // 설정 메뉴를 연 상태의 화면 요소를 모은다 (길이 선택이 안 될 때 원인 확인용).
+  async function diagnoseSettings() {
+    const trigger = settingsTrigger();
+    if (!trigger) return { ok: false, error: '설정 버튼을 찾지 못함' };
+    const before = new Set(document.querySelectorAll('*'));
+    trigger.click();
+    await sleep(800);
+    const appeared = [...document.querySelectorAll(CLICKABLE + ', [role="combobox"], [role="listbox"], [role="menu"], [role="dialog"]')]
+      .filter((el) => isVisible(el) && !before.has(el))
+      .map(describe);
+    const dd = durationDropdown();
+    const result = {
+      trigger: describe(trigger),
+      appeared,
+      durationDropdown: dd ? describe(dd) : null,
+      durationOptions: [...durationOptions().keys()],
+    };
+    pressEscape();
+    await sleep(300);
+    return { ok: true, details: result };
+  }
+
   // ---------- 큐 실행 (패널을 닫아도 페이지에서 계속 돈다) ----------
   // 상태는 chrome.storage.local에 두고, 사이드패널은 화면 표시만 한다.
   let looping = false;
@@ -232,11 +345,20 @@
     try {
       for (;;) {
         if (await shouldStop()) break;
-        const { queue = [], interval = 10, retries = 2 } = await getStore(['queue', 'interval', 'retries']);
+        const { queue = [], interval = 10, retries = 2, autoDuration = true } = await getStore(['queue', 'interval', 'retries', 'autoDuration']);
         const item = queue.find((q) => q.status === 'pending');
         if (!item) break;
 
         await patchItem(item.id, { status: 'running', error: '', note: '' });
+        // 프롬프트에 적힌 시간에 맞춰 영상 길이를 고른다. 실패해도 제출은 하고 메모만 남긴다.
+        const notes = [];
+        if (autoDuration) {
+          const needed = requiredSeconds(item.text);
+          const d = await ensureDuration(needed).catch((e) => ({ ok: false, error: String(e) }));
+          if (!d.ok) notes.push(`길이 자동 선택 실패: ${d.error}`);
+          else if (!d.skipped && d.chosen !== needed) notes.push(`프롬프트는 ${needed}초, 선택 가능한 길이 중 ${d.chosen}초로 생성`);
+          else if (!d.skipped) notes.push(`${d.chosen}초로 생성`);
+        }
         const before = alertTexts();
         let res;
         for (let attempt = 0; attempt <= retries; attempt++) {
@@ -247,7 +369,8 @@
         await sleep(1500);
         const fresh = [...alertTexts()].filter((t) => !before.has(t)).join(' / ').slice(0, 300);
 
-        if (res.ok) await patchItem(item.id, { status: 'done', note: fresh ? `Flow 메시지: ${fresh}` : '' });
+        if (fresh) notes.push(`Flow 메시지: ${fresh}`);
+        if (res.ok) await patchItem(item.id, { status: 'done', note: notes.join(' / ') });
         else await patchItem(item.id, { status: 'failed', error: res.error + (fresh ? ` (Flow 메시지: ${fresh})` : '') });
 
         const { queue: after = [] } = await getStore('queue');
@@ -292,6 +415,7 @@
         }
         if (msg.type === 'submit') return await submitPrompt(msg.text, msg.options);
         if (msg.type === 'diagnose') return { ok: true, details: diagnose() };
+        if (msg.type === 'diagnoseSettings') return await diagnoseSettings();
         return { ok: false, error: '알 수 없는 요청' };
       } catch (e) {
         return { ok: false, error: String(e && e.message ? e.message : e) };
