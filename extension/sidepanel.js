@@ -1,31 +1,42 @@
-// 사이드패널: 큐 관리와 실행 루프. 실제 DOM 조작은 content.js가 한다.
+// 사이드패널: 큐 편집과 상태 표시. 실제 실행은 Flow 페이지의 content.js가 한다.
 const $ = (id) => document.getElementById(id);
 const STATUS_TEXT = { pending: '대기', running: '진행 중', done: '완료', failed: '실패' };
 const FLOW_URL = /^https:\/\/(flow\.google\.com|labs\.google\/fx)\//;
 
-let queue = []; // { id, text, status, error }
+let queue = []; // { id, text, status, error, note }
 let running = false;
-let stopRequested = false;
 
 // ---------- 저장/불러오기 ----------
 async function load() {
-  const data = await chrome.storage.local.get(['queue', 'interval', 'retries', 'split']);
-  // 진행 중이던 항목은 패널을 다시 열면 대기로 되돌린다.
-  queue = (data.queue || []).map((q) => (q.status === 'running' ? { ...q, status: 'pending' } : q));
+  const data = await chrome.storage.local.get(['queue', 'interval', 'retries', 'split', 'runState']);
+  queue = data.queue || [];
+  running = !!(data.runState && data.runState.running);
   if (data.interval != null) $('interval').value = data.interval;
   if (data.retries != null) $('retries').value = data.retries;
   if (data.split) document.querySelector(`input[name=split][value=${data.split}]`).checked = true;
   render();
 }
 
-function save() {
+// 큐는 content.js도 수정하므로 항상 최신 값을 읽은 뒤 바꿔서 저장한다.
+async function updateQueue(fn) {
+  const { queue: cur = [] } = await chrome.storage.local.get('queue');
+  await chrome.storage.local.set({ queue: fn(cur) });
+}
+
+function saveSettings() {
   chrome.storage.local.set({
-    queue,
     interval: Number($('interval').value),
     retries: Number($('retries').value),
     split: document.querySelector('input[name=split]:checked').value,
   });
 }
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return;
+  if (changes.queue) queue = changes.queue.newValue || [];
+  if (changes.runState) running = !!(changes.runState.newValue && changes.runState.newValue.running);
+  if (changes.queue || changes.runState) render();
+});
 
 // ---------- 화면 ----------
 function render() {
@@ -34,32 +45,33 @@ function render() {
   for (const item of queue) {
     const li = document.createElement('li');
     li.className = item.status;
-    const st = document.createElement('span');
-    st.className = 'st';
-    st.textContent = `[${STATUS_TEXT[item.status]}]`;
-    li.append(st, document.createTextNode(item.text));
-    if (!running) {
+    if (item.status !== 'running') {
       const del = document.createElement('button');
       del.className = 'del';
       del.title = '삭제';
       del.textContent = '×';
-      del.onclick = () => { queue = queue.filter((q) => q.id !== item.id); save(); render(); };
-      li.prepend(del);
+      del.onclick = () => updateQueue((q) => q.filter((x) => x.id !== item.id));
+      li.append(del);
     }
-    if (item.error) {
-      const e = document.createElement('span');
-      e.className = 'err';
-      e.textContent = item.error;
-      li.append(e);
+    const st = document.createElement('span');
+    st.className = 'st';
+    st.textContent = `[${STATUS_TEXT[item.status]}]`;
+    li.append(st, document.createTextNode(item.text));
+    for (const [cls, text] of [['note', item.note], ['err', item.error]]) {
+      if (!text) continue;
+      const span = document.createElement('span');
+      span.className = cls;
+      span.textContent = text;
+      li.append(span);
     }
     ol.append(li);
   }
   const done = queue.filter((q) => q.status === 'done').length;
   $('count').textContent = queue.length ? `(${done}/${queue.length})` : '';
-  $('startBtn').disabled = running || !queue.some((q) => q.status !== 'done');
+  $('startBtn').disabled = running || !queue.some((q) => q.status === 'pending');
   $('stopBtn').disabled = !running;
   $('clearBtn').disabled = running;
-  $('addBtn').disabled = running;
+  $('retryBtn').disabled = !queue.some((q) => q.status === 'failed');
 }
 
 function setConn(text, cls) {
@@ -71,7 +83,7 @@ function setConn(text, cls) {
 // ---------- 프롬프트 파싱 ----------
 function splitPrompts(text, mode) {
   const parts = mode === 'blank' ? text.split(/\n\s*\n/) : text.split(/\n/);
-  return parts.map((s) => s.replace(/\s+$/g, '').trim()).filter(Boolean);
+  return parts.map((s) => s.trim()).filter(Boolean);
 }
 
 // UTF-8로 먼저 읽고, 깨지면 EUC-KR(엑셀 기본 CSV)로 다시 읽는다.
@@ -110,9 +122,8 @@ function parseCsv(text) {
 }
 
 function addPrompts(list) {
-  for (const text of list) queue.push({ id: crypto.randomUUID(), text, status: 'pending' });
-  save();
-  render();
+  const items = list.map((text) => ({ id: crypto.randomUUID(), text, status: 'pending' }));
+  return updateQueue((q) => q.concat(items));
 }
 
 // ---------- Flow 탭 연결 ----------
@@ -124,6 +135,7 @@ async function getFlowTab() {
 }
 
 async function send(tab, msg) {
+  msg = { ...msg, tabId: tab.id };
   try {
     return await chrome.tabs.sendMessage(tab.id, msg);
   } catch {
@@ -146,60 +158,12 @@ async function checkConnection() {
   return tab;
 }
 
-// ---------- 실행 루프 ----------
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-async function sleepUnlessStopped(ms) {
-  const end = Date.now() + ms;
-  while (!stopRequested && Date.now() < end) await sleep(200);
-}
-
-async function run() {
-  const tab = await checkConnection();
-  if (!tab) return alert('Google Flow 프로젝트 탭을 먼저 열어 주세요.');
-
-  running = true;
-  stopRequested = false;
-  save();
-  render();
-
-  const intervalMs = Math.max(0, Number($('interval').value) || 0) * 1000;
-  const retries = Math.max(0, Number($('retries').value) || 0);
-
-  for (const item of queue) {
-    if (stopRequested) break;
-    if (item.status === 'done') continue;
-    item.status = 'running';
-    item.error = '';
-    render();
-
-    let res;
-    for (let attempt = 0; attempt <= retries && !stopRequested; attempt++) {
-      res = await send(tab, { type: 'submit', text: item.text }).catch((e) => ({ ok: false, error: String(e) }));
-      if (res && res.ok) break;
-      await sleepUnlessStopped(3000);
-    }
-
-    if (res && res.ok) item.status = 'done';
-    else if (stopRequested) item.status = 'pending';
-    else { item.status = 'failed'; item.error = (res && res.error) || '알 수 없는 오류'; }
-    save();
-    render();
-
-    if (queue.some((q) => q.status === 'pending')) await sleepUnlessStopped(intervalMs);
-  }
-
-  running = false;
-  save();
-  render();
-}
-
 // ---------- 이벤트 ----------
-$('addBtn').onclick = () => {
+$('addBtn').onclick = async () => {
   const mode = document.querySelector('input[name=split]:checked').value;
   const list = splitPrompts($('prompts').value, mode);
   if (!list.length) return;
-  addPrompts(list);
+  await addPrompts(list);
   $('prompts').value = '';
 };
 
@@ -209,16 +173,24 @@ $('file').onchange = async (e) => {
   if (!file) return;
   const text = decodeKorean(await file.arrayBuffer());
   const mode = document.querySelector('input[name=split]:checked').value;
-  addPrompts(/\.csv$/i.test(file.name) ? parseCsv(text) : splitPrompts(text, mode));
+  await addPrompts(/\.csv$/i.test(file.name) ? parseCsv(text) : splitPrompts(text, mode));
   e.target.value = '';
 };
 
-$('startBtn').onclick = run;
-$('stopBtn').onclick = () => { stopRequested = true; $('stopBtn').disabled = true; };
-$('clearBtn').onclick = () => { queue = []; save(); render(); };
-$('interval').onchange = save;
-$('retries').onchange = save;
-document.querySelectorAll('input[name=split]').forEach((r) => (r.onchange = save));
+$('startBtn').onclick = async () => {
+  saveSettings();
+  const tab = await checkConnection();
+  if (!tab) return alert('Google Flow 프로젝트 탭을 먼저 열어 주세요.');
+  const res = await send(tab, { type: 'start' }).catch((e) => ({ ok: false, error: String(e) }));
+  if (!res || !res.ok) alert(`시작하지 못했습니다: ${(res && res.error) || ''}`);
+};
+$('stopBtn').onclick = () => chrome.storage.local.set({ runState: { running: false } });
+$('retryBtn').onclick = () =>
+  updateQueue((q) => q.map((x) => (x.status === 'failed' ? { ...x, status: 'pending', error: '' } : x)));
+$('clearBtn').onclick = () => chrome.storage.local.set({ queue: [] });
+$('interval').onchange = saveSettings;
+$('retries').onchange = saveSettings;
+document.querySelectorAll('input[name=split]').forEach((r) => (r.onchange = saveSettings));
 
 $('diagBtn').onclick = async () => {
   const tab = await getFlowTab();

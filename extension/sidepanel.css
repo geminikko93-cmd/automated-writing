@@ -26,5 +26,6 @@ li.pending .st { color:var(--muted); }
 li.running .st { color:var(--run); }
 li.done .st { color:var(--ok); }
 li.failed .st { color:var(--err); }
+li .note { display:block; color:var(--muted); font-size:11px; }
 li .err { display:block; color:var(--err); font-size:11px; }
 li .del { float:right; border:none; background:none; color:var(--muted); padding:0 4px; }

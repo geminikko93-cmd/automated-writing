@@ -190,10 +190,106 @@
     };
   }
 
+  // ---------- 큐 실행 (패널을 닫아도 페이지에서 계속 돈다) ----------
+  // 상태는 chrome.storage.local에 두고, 사이드패널은 화면 표시만 한다.
+  let looping = false;
+
+  const getStore = (keys) => chrome.storage.local.get(keys);
+  const setStore = (obj) => chrome.storage.local.set(obj);
+
+  // 항목 하나만 바꿔 저장한다. 그 사이 패널에서 추가한 항목이 지워지지 않도록 매번 새로 읽는다.
+  async function patchItem(id, patch) {
+    const { queue = [] } = await getStore('queue');
+    const item = queue.find((q) => q.id === id);
+    if (item) Object.assign(item, patch);
+    await setStore({ queue });
+  }
+
+  async function shouldStop() {
+    const { runState } = await getStore('runState');
+    return !runState || !runState.running || runState.tabId !== myTabId;
+  }
+
+  async function sleepUnlessStopped(ms) {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      if (await shouldStop()) return;
+      await sleep(Math.min(500, end - Date.now()));
+    }
+  }
+
+  // 제출 직후 Flow가 띄운 안내/오류 문구를 모은다 (예: 동시 생성 개수 초과).
+  const alertTexts = () =>
+    new Set(
+      [...document.querySelectorAll('[role="alert"], [role="status"], [aria-live]')]
+        .map((el) => (el.innerText || '').trim())
+        .filter(Boolean)
+    );
+
+  async function runLoop() {
+    if (looping) return;
+    looping = true;
+    try {
+      for (;;) {
+        if (await shouldStop()) break;
+        const { queue = [], interval = 10, retries = 2 } = await getStore(['queue', 'interval', 'retries']);
+        const item = queue.find((q) => q.status === 'pending');
+        if (!item) break;
+
+        await patchItem(item.id, { status: 'running', error: '', note: '' });
+        const before = alertTexts();
+        let res;
+        for (let attempt = 0; attempt <= retries; attempt++) {
+          res = await submitPrompt(item.text).catch((e) => ({ ok: false, error: String(e) }));
+          if (res.ok || (await shouldStop())) break;
+          await sleep(3000);
+        }
+        await sleep(1500);
+        const fresh = [...alertTexts()].filter((t) => !before.has(t)).join(' / ').slice(0, 300);
+
+        if (res.ok) await patchItem(item.id, { status: 'done', note: fresh ? `Flow 메시지: ${fresh}` : '' });
+        else await patchItem(item.id, { status: 'failed', error: res.error + (fresh ? ` (Flow 메시지: ${fresh})` : '') });
+
+        const { queue: after = [] } = await getStore('queue');
+        if (after.some((q) => q.status === 'pending')) await sleepUnlessStopped(Math.max(0, Number(interval) || 0) * 1000);
+      }
+    } finally {
+      looping = false;
+      const { runState } = await getStore('runState');
+      if (runState && runState.tabId === myTabId) await setStore({ runState: { running: false } });
+    }
+  }
+
+  let myTabId = null;
+
+  // 페이지를 새로고침해도 실행 중이었다면 이어서 진행한다.
+  // 새로고침 직전에 진행 중이던 항목은 제출됐는지 알 수 없으므로 중복 생성을 막기 위해 실패로 표시한다.
+  async function resumeIfNeeded() {
+    const { runState, queue = [] } = await getStore(['runState', 'queue']);
+    if (!runState || !runState.running || runState.tabId !== myTabId) return;
+    let changed = false;
+    for (const q of queue) {
+      if (q.status === 'running') {
+        q.status = 'failed';
+        q.error = '실행 중 페이지가 새로고침되어 중단됨. Flow에서 생성 여부를 확인한 뒤 필요하면 다시 시도하세요.';
+        changed = true;
+      }
+    }
+    if (changed) await setStore({ queue });
+    await waitFor(findSubmit, 20000, 500);
+    runLoop();
+  }
+
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     (async () => {
       try {
-        if (msg.type === 'ping') return { ok: true, ready: !!findSubmit() };
+        if (msg.tabId != null) myTabId = msg.tabId;
+        if (msg.type === 'ping') return { ok: true, ready: !!findSubmit(), looping };
+        if (msg.type === 'start') {
+          await setStore({ runState: { running: true, tabId: myTabId } });
+          runLoop();
+          return { ok: true };
+        }
         if (msg.type === 'submit') return await submitPrompt(msg.text, msg.options);
         if (msg.type === 'diagnose') return { ok: true, details: diagnose() };
         return { ok: false, error: '알 수 없는 요청' };
@@ -203,4 +299,11 @@
     })().then(sendResponse);
     return true;
   });
+
+  chrome.runtime.sendMessage({ type: 'whoami' }).then((res) => {
+    if (res && res.tabId != null) {
+      myTabId = res.tabId;
+      resumeIfNeeded();
+    }
+  }).catch(() => {});
 })();
