@@ -1,0 +1,30 @@
+:root { --bg:#fff; --fg:#1f1f1f; --muted:#666; --line:#ddd; --accent:#1a73e8; --ok:#188038; --err:#d93025; --run:#e37400; }
+@media (prefers-color-scheme: dark) { :root { --bg:#1f1f1f; --fg:#e8e8e8; --muted:#9aa0a6; --line:#3c4043; --accent:#8ab4f8; --ok:#81c995; --err:#f28b82; --run:#fdd663; } }
+* { box-sizing: border-box; }
+body { margin:0; padding:12px; font:13px/1.5 system-ui, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; background:var(--bg); color:var(--fg); }
+header { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+h1 { font-size:16px; margin:0; }
+section { border-top:1px solid var(--line); padding:10px 0; }
+label { display:block; margin-bottom:4px; font-weight:600; }
+label.inline { display:inline-flex; align-items:center; gap:4px; font-weight:400; margin:0 10px 0 0; }
+textarea { width:100%; resize:vertical; padding:8px; border:1px solid var(--line); border-radius:6px; background:transparent; color:inherit; font:inherit; }
+input[type=number] { width:56px; padding:2px 4px; background:transparent; color:inherit; border:1px solid var(--line); border-radius:4px; }
+.row { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:6px; }
+.between { justify-content:space-between; }
+button { padding:6px 12px; border-radius:6px; border:1px solid var(--accent); background:var(--accent); color:var(--bg); cursor:pointer; font:inherit; }
+button.secondary { background:transparent; color:var(--accent); }
+button.link { border:none; background:none; color:var(--accent); padding:0; }
+button:disabled { opacity:.4; cursor:default; }
+.hint { color:var(--muted); font-size:12px; margin:6px 0; }
+.badge { font-size:11px; padding:2px 8px; border-radius:10px; border:1px solid var(--line); color:var(--muted); }
+.badge.ok { color:var(--ok); border-color:var(--ok); }
+.badge.err { color:var(--err); border-color:var(--err); }
+ol { padding-left:20px; margin:6px 0 0; }
+li { padding:4px 0; border-bottom:1px dashed var(--line); word-break:break-all; }
+li .st { font-size:11px; margin-right:6px; }
+li.pending .st { color:var(--muted); }
+li.running .st { color:var(--run); }
+li.done .st { color:var(--ok); }
+li.failed .st { color:var(--err); }
+li .err { display:block; color:var(--err); font-size:11px; }
+li .del { float:right; border:none; background:none; color:var(--muted); padding:0 4px; }

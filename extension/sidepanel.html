@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>플로우 큐</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <header>
+    <h1>플로우 큐</h1>
+    <span id="conn" class="badge">연결 확인 중…</span>
+  </header>
+
+  <section>
+    <label for="prompts">프롬프트</label>
+    <textarea id="prompts" rows="10" placeholder="프롬프트를 입력하세요. 한글 사용 가능합니다.&#10;&#10;예) 비 오는 서울 골목을 걷는 고양이, 시네마틱"></textarea>
+    <div class="row">
+      <label class="inline"><input type="radio" name="split" value="line" checked> 한 줄에 하나</label>
+      <label class="inline"><input type="radio" name="split" value="blank"> 빈 줄로 구분</label>
+    </div>
+    <div class="row">
+      <button id="importBtn" class="secondary">TXT/CSV 불러오기</button>
+      <input id="file" type="file" accept=".txt,.csv" hidden>
+      <button id="addBtn">큐에 추가</button>
+    </div>
+  </section>
+
+  <section>
+    <div class="row">
+      <label class="inline">제출 간격(초) <input id="interval" type="number" min="0" value="10"></label>
+      <label class="inline">재시도 <input id="retries" type="number" min="0" max="5" value="2"></label>
+    </div>
+    <p class="hint">모델·비율·길이·개수는 Flow 입력창의 설정 버튼에서 먼저 맞춰 두세요. 모든 프롬프트에 그대로 적용됩니다.</p>
+    <div class="row">
+      <button id="startBtn">시작</button>
+      <button id="stopBtn" class="secondary" disabled>정지</button>
+      <button id="clearBtn" class="secondary">큐 비우기</button>
+    </div>
+  </section>
+
+  <section>
+    <div class="row between">
+      <strong>큐 <span id="count"></span></strong>
+      <button id="diagBtn" class="link">진단 정보 복사</button>
+    </div>
+    <ol id="queue"></ol>
+  </section>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>
